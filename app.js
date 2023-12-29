@@ -1,4 +1,4 @@
-//jshint esversion:6
+import "dotenv/config";
 import express from "express";
 import ejs from "ejs";
 import bodyParser from "body-parser";
@@ -25,10 +25,8 @@ const userSchema = new Schema({
     password: String
 });
 
-const secret = "Thisisourlittlesecret.";
-
 // Password encryption and authentication of email
-userSchema.plugin(encrypt, { secret: secret,  encryptedFields: ["password"], excludeFromEncryption: ["email"], additionalAuthenticatedFields: ["email"] });
+userSchema.plugin(encrypt, { secret: process.env.SECRET,  encryptedFields: ["password"], excludeFromEncryption: ["email"], additionalAuthenticatedFields: ["email"] });
 
 const User = mongoose.model("User", userSchema);
 
