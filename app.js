@@ -3,6 +3,7 @@ import express from "express";
 import ejs from "ejs";
 import bodyParser from "body-parser";
 import mongoose from "mongoose";
+import encrypt from "mongoose-encryption";
 
 
 const app = express();
@@ -23,6 +24,11 @@ const userSchema = new Schema({
     email: String,
     password: String
 });
+
+const secret = "Thisisourlittlesecret.";
+
+// Password encryption and authentication of email
+userSchema.plugin(encrypt, { secret: secret,  encryptedFields: ["password"], excludeFromEncryption: ["email"], additionalAuthenticatedFields: ["email"] });
 
 const User = mongoose.model("User", userSchema);
 
