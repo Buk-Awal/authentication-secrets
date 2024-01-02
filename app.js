@@ -1,10 +1,13 @@
-import "dotenv/config";
+import {} from "dotenv/config";
 import express from "express";
 import ejs from "ejs";
 import bodyParser from "body-parser";
 import mongoose from "mongoose";
-import encrypt from "mongoose-encryption";
-
+import session from "express-session";
+import passport from "passport";
+import passportLocalMongoose from "passport-local-mongoose"
+import GoogleStrategy from "passport-google-oauth20";
+import findOrCreate from "mongoose-findorcreate";
 
 const app = express();
 const port = 3000;
@@ -12,6 +15,26 @@ const port = 3000;
 app.use(express.urlencoded({ extended: true }));
 app.set("view engine", "ejs");
 app.use(express.static("public"));
+app.use(session({
+    secret: "This is our little secret.",
+    resave: false,
+    saveUninitialized: false
+}));
+
+passport.use(new GoogleStrategy({
+    clientID: process.env.CLIENT_ID,
+    clientSecret: process.env.CLIENT_SECRET,
+    callbackURL: "http://localhost:3000/auth/google/secrets"
+  },
+  function(accessToken, refreshToken, profile, cb) {
+    User.findOrCreate({ googleId: profile.id }, function (err, user) {
+      return cb(err, user);
+    });
+  }
+));
+
+app.use(passport.initialize());
+app.use(passport.session());
 
 await mongoose.connect('mongodb://127.0.0.1/userDB');
 
@@ -22,13 +45,29 @@ const ObjectId = Schema.ObjectId;
 // // Create the user schema
 const userSchema = new Schema({
     email: String,
-    password: String
+    password: String,
+    googleId: String,
+    secret: String
 });
 
-// Password encryption and authentication of email
-userSchema.plugin(encrypt, { secret: process.env.SECRET,  encryptedFields: ["password"], excludeFromEncryption: ["email"], additionalAuthenticatedFields: ["email"] });
+userSchema.plugin(passportLocalMongoose);
+userSchema.plugin(findOrCreate);
 
 const User = mongoose.model("User", userSchema);
+
+passport.use(User.createStrategy());
+
+passport.serializeUser(function(user, cb) {
+    process.nextTick(function() {
+      cb(null, { id: user.id, username: user.username });
+    });
+  });
+  
+  passport.deserializeUser(function(user, cb) {
+    process.nextTick(function() {
+      return cb(null, user);
+    });
+  });
 
 // Home page route
 app.get("/", (req, res) => {
@@ -40,45 +79,32 @@ app.get("/login", (req, res) => {
     res.render("login");
 });
 
-async function logIn (userId, password) {
-    try {
-        const user = await User.findOne({email: userId});
+app.get("/auth/google", passport.authenticate("google", { scope: ["profile"] }));
 
-        // if user not found
-        if(!user) {
-            return { success: false, message: "Invalid user id"};
-        }
-        
-        const isPasswordValid = (password === user.password) ? true : false;
+app.get("/auth/google/secrets", 
+    passport.authenticate("google", { failureRedirect: "/login" }),
 
-        if(isPasswordValid) {
-            return {success: true, user};
-        } else {
-            return {success: false, message: "Invalid password"};
-        }
-        
-    } catch (error) {
-        console.log("Login error: ", error);
-        return {success: false, message: "Login failed"};
+    function(req, res) {
+        res.redirect("/secrets");   
     }
-}
+);
 
 app.post("/login", async (req, res) => {
-    const email = req.body.username;
-    const password = req.body.password;
-
-    if(email && password) {
-        const loginResult = await logIn(email, password);
-        
-        if(loginResult.success === false) {
-            console.log(loginResult.message);
-        }
-
-        if(loginResult.success === true) {
-            res.render("secrets");
-        }        
-    }
+    const user = new User({
+        username: req.body.username,
+        password: req.body.password
+    });
     
+    
+    req.login(user, function(err) {
+        if (err) {
+            console.log(err);
+        } else {
+            passport.authenticate("local")(req, res, function(){
+                res.redirect("/secrets");
+            });
+        }
+    });
 });
 
 // Register route
@@ -87,31 +113,48 @@ app.get("/register", (req, res) => {
 });
 
 app.post("/register", async (req, res) => {
-    const email = req.body.username;
-    const password = req.body.password;
-
-    let error;
-    let success;
-
-    const newUser = new User({
-        email: email,
-        password: password
+    User.register({ username: req.body.username }, req.body.password, function(err, user) {
+      if (err) {
+          console.log(err);
+          res.redirect("/register");
+      } else {
+          passport.authenticate("local")(req, res, () => {
+              res.redirect("/secrets");
+          });
+      }
     });
+  });
 
-    try {
-        const result = await newUser.save();
-        success = result;
-    } catch (err) {
-        error = err;
-    }
+// secrets route
+app.get("/secrets", function(req, res) {
+    User.find({ "secret": { $ne: null } }).then((foundUsers) => { res.render("secrets", {userWithSecrets: foundUsers })}).catch((err) => {console.log("Error, no users with secrets found")});
+});
 
-    if(error) {
-        console.log(error);
+app.get("/submit", (req, res) => {
+    if(req.isAuthenticated()) {
+        res.render("submit");
+    } else {
+        res.redirect("/login");
     }
+});
 
-    if(success) {
-        res.render("secrets");
-    }
+app.post("/submit", (req, res) => {
+    const submittedSecret = req.body.secret;
+
+    User.findById(req.user.id).then((foundUser) => {
+        foundUser.secret = submittedSecret;
+        foundUser.save();
+        res.redirect("/secrets");
+    }).catch((err) => {console.log(err)}); 
+    
+});
+
+// Logout route
+app.get("/logout", function(req, res, next) {
+    req.logout(function(err) {
+        if (err) { return next(err); }
+        res.redirect("/");
+    });
 });
 
 app.listen(port, () => {
